@@ -1,59 +1,277 @@
-import React,{useEffect,useRef,useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import * as THREE from 'three';
 import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
 import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
 import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
 import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
-import {rank,lensScore,openTasks} from '../lib/model.js';
-const vertex=`varying vec3 vNormal; varying vec3 vPosition; void main(){vNormal=normalize(normalMatrix*normal);vPosition=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`;
-const fragment=`uniform vec3 baseColor;uniform float time;uniform float seed;uniform float sun;varying vec3 vNormal;varying vec3 vPosition;
-float hash(vec3 p){return fract(sin(dot(p,vec3(127.1,311.7,74.7)))*43758.5453);}
-float noise(vec3 p){vec3 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);}
-float fbm(vec3 p){return noise(p)*.5+noise(p*2.1)*.25+noise(p*4.3)*.125+noise(p*8.7)*.0625;}
-void main(){vec3 p=normalize(vPosition);float n=fbm(p*5.+vec3(seed,time*.013,0));float bands=sin(p.y*25.+n*13.+seed);float storm=fbm(p*15.+n*3.);vec3 col=baseColor*(.45+.55*n+.20*bands);col=mix(col,baseColor*1.65,storm*.36);float lit=max(dot(normalize(vNormal),normalize(vec3(-.7,1.,1.))),0.);float rim=pow(1.-max(dot(normalize(vNormal),vec3(0,0,1)),0.),3.);if(sun>.5){col=baseColor*(.8+n*.7)+vec3(.45,.2,.05)*bands*.2;}else{col*=.14+lit*1.35;col+=baseColor*rim*.5;}gl_FragColor=vec4(col,1.);}`;
-const atmosphereFragment=`uniform vec3 baseColor;uniform float strength;varying vec3 vNormal;void main(){float f=pow(1.-abs(dot(normalize(vNormal),vec3(0,0,1))),3.);gl_FragColor=vec4(baseColor*strength,f*.38);}`;
-const angles=[2.6,.55,4.0,5.35,1.4,3.2,4.55];
-export default function SolarScene({ventures,tasks,lens,selected,onSelect,paused,resetKey}){
- const host=useRef(null),labelRefs=useRef({}),live=useRef({ventures,tasks,lens,selected,onSelect,paused});live.current={ventures,tasks,lens,selected,onSelect,paused};
- const [failed,setFailed]=useState(false);const controlRef=useRef(null);const ids=ventures.map(v=>v.id).join('|');
- useEffect(()=>{controlRef.current?.reset()},[resetKey]);
+import {rank, lensScore, openTasks} from '../lib/model.js';
+
+const vertex = `
+ varying vec3 vNormal;
+ varying vec3 vPosition;
+ void main() {
+  vNormal = normalize(normalMatrix * normal);
+  vPosition = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.);
+ }
+`;
+const noise = `
+ float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+ float noise(vec3 p) {
+  vec3 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+  return mix(mix(mix(hash(i), hash(i+vec3(1,0,0)), f.x), mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), f.x), f.y),
+    mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), f.x), mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), f.x), f.y), f.z);
+ }
+ float fbm(vec3 p) { return noise(p)*.5 + noise(p*2.03)*.25 + noise(p*4.17)*.125 + noise(p*8.31)*.0625; }
+`;
+const worldFragment = `
+ uniform vec3 baseColor;
+ uniform float time;
+ uniform float seed;
+ uniform float sun;
+ varying vec3 vNormal;
+ varying vec3 vPosition;
+ ${noise}
+ void main() {
+  vec3 p = normalize(vPosition);
+  vec3 n = normalize(vNormal);
+  float flow = fbm(p*3.8 + vec3(seed, time*.016, 0.));
+  float clouds = fbm(p*11. + flow*2.8 + seed);
+  float filaments = smoothstep(.36, .62, fbm(p*22. + flow*3.));
+  float bands = .5 + .5*sin(p.y*11. + flow*6. + seed);
+  vec3 light = normalize(vec3(-1.1,.48,.3));
+  float day = max(dot(n,light),0.);
+  float specular = pow(max(dot(n,normalize(light+vec3(0,0,1))),0.),72.);
+  float rim = pow(1. - max(dot(n,vec3(0,0,1)),0.),4.);
+  vec3 color = mix(baseColor*.12,baseColor*.82,flow);
+  color += baseColor*(clouds*.20+bands*.065);
+  color *= .18 + day*1.25;
+  color += baseColor * rim * .34;
+  color += vec3(.94,.97,.91) * specular * .22;
+  color += baseColor * filaments * day * .065;
+  if(sun > .5) {
+   float granules = fbm(p*24. + vec3(time*.06,0,0));
+   color = vec3(1.,.32,.055) * (1.05 + granules*.45) + vec3(.24,.17,.02)*flow;
+  }
+  gl_FragColor = vec4(color,1.);
+ }
+`;
+const atmosphereFragment = `
+ uniform vec3 baseColor;
+ uniform float strength;
+ varying vec3 vNormal;
+ void main() {
+  float rim = pow(1. - abs(dot(normalize(vNormal),vec3(0,0,1))),4.5);
+  gl_FragColor = vec4(baseColor * strength, rim*.32);
+ }
+`;
+const positions = [2.12,-.08,3.55,5.02,.69,2.87,4.02];
+
+export default function SolarScene({ventures, tasks, lens, selected, onSelect, paused, resetKey}) {
+ const host = useRef(null), labels = useRef({}), controlsRef = useRef(null), connectors = useRef({});
+ const live = useRef({ventures,tasks,lens,selected,onSelect,paused});
+ live.current = {ventures,tasks,lens,selected,onSelect,paused};
+ const [failed,setFailed] = useState(false);
+ const ids = ventures.map(v=>v.id).join('|');
+ useEffect(()=>{controlsRef.current?.reset()},[resetKey]);
+
  useEffect(()=>{
-  let renderer,composer,controls,frame,resize,disposed=false;const el=host.current;const tracked=[];const keep=x=>(tracked.push(x),x);
-  try{
-   const scene=new THREE.Scene();scene.background=new THREE.Color('#080b13');scene.fog=new THREE.FogExp2('#080b13',.006);
-   const camera=new THREE.PerspectiveCamera(42,1,.1,220);camera.position.set(0,29,24);
-   renderer=new THREE.WebGLRenderer({antialias:true,alpha:false,powerPreference:'high-performance'});renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.6));renderer.setSize(el.clientWidth,el.clientHeight);renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.22;el.appendChild(renderer.domElement);
-   controls=new OrbitControls(camera,renderer.domElement);controlRef.current=controls;controls.enableDamping=true;controls.dampingFactor=.07;controls.enablePan=false;controls.minDistance=14;controls.maxDistance=58;controls.minPolarAngle=.08;controls.maxPolarAngle=Math.PI*.47;controls.saveState();
-   composer=new EffectComposer(renderer);composer.addPass(new RenderPass(scene,camera));const bloom=new UnrealBloomPass(new THREE.Vector2(el.clientWidth,el.clientHeight),.65,.7,.82);composer.addPass(bloom);
-   const starVertices=[];let rng=713;const random=()=>{rng=(rng*16807)%2147483647;return (rng-1)/2147483646};for(let i=0;i<1800;i++){starVertices.push((random()-.5)*155,(random()-.5)*100-10,(random()-.5)*155)}
-   const sg=keep(new THREE.BufferGeometry());sg.setAttribute('position',new THREE.Float32BufferAttribute(starVertices,3));const sm=keep(new THREE.PointsMaterial({color:'#aeb6dd',size:.065,sizeAttenuation:true,transparent:true,opacity:.68}));scene.add(new THREE.Points(sg,sm));
-   const sphere=keep(new THREE.SphereGeometry(1,48,32));
-   function world(color,seed,sun=0){const group=new THREE.Group();const material=keep(new THREE.ShaderMaterial({vertexShader:vertex,fragmentShader:fragment,uniforms:{baseColor:{value:new THREE.Color(color)},time:{value:0},seed:{value:seed},sun:{value:sun}}}));const mesh=new THREE.Mesh(sphere,material);group.add(mesh);const at=keep(new THREE.ShaderMaterial({vertexShader:vertex,fragmentShader:atmosphereFragment,uniforms:{baseColor:{value:new THREE.Color(color)},strength:{value:sun?2:1.4}},transparent:true,side:THREE.BackSide,blending:THREE.AdditiveBlending,depthWrite:false}));const halo=new THREE.Mesh(sphere,at);halo.scale.setScalar(1.12);group.add(halo);scene.add(group);return {group,mesh,material,at};}
-   const core=world('#ffc983',1,1);core.group.scale.setScalar(.85);
-   const circlePoints=r=>Array.from({length:161},(_,i)=>new THREE.Vector3(Math.cos(i/160*Math.PI*2)*r,0,Math.sin(i/160*Math.PI*2)*r));
+  let renderer, composer, controls, bloom, resize, frame;
+  let disposed = false, interaction = false;
+  const resources = [], track = resource => (resources.push(resource),resource);
+  const el = host.current;
+  try {
+   const scene = new THREE.Scene();scene.background=new THREE.Color('#080a0b');
+   const camera = new THREE.PerspectiveCamera(37,1,.1,200);
+   camera.position.set(0,21,31);
+   renderer = new THREE.WebGLRenderer({antialias:true,alpha:true,powerPreference:'high-performance'});
+   renderer.setPixelRatio(Math.min(window.devicePixelRatio,1.5));
+   renderer.setClearColor('#080a0b',0);
+   renderer.toneMapping = THREE.ACESFilmicToneMapping;
+   renderer.toneMappingExposure = 1.3;
+   el.appendChild(renderer.domElement);
+   controls = new OrbitControls(camera,renderer.domElement);
+   controlsRef.current = controls;
+   controls.enableDamping = true;
+   controls.dampingFactor = .055;
+   controls.enablePan = false;
+   controls.minDistance = 25;
+   controls.maxDistance = 60;
+   controls.minPolarAngle = .25;
+   controls.maxPolarAngle = Math.PI*.465;
+   controls.saveState();
+   controls.addEventListener('start',()=>{interaction=true});
+   controls.addEventListener('end',()=>{interaction=false});
+   composer = new EffectComposer(renderer);
+   composer.addPass(new RenderPass(scene,camera));
+   bloom = new UnrealBloomPass(new THREE.Vector2(1,1),.9,.75,1.05);
+   composer.addPass(bloom);
+
+   // Deterministic sparse particles: a quiet orbital field, rather than a star wallpaper.
+   let randomSeed = 715;
+   const random = ()=>{randomSeed=randomSeed*16807%2147483647;return (randomSeed-1)/2147483646};
+   const vertices=[];
+   for(let i=0;i<1050;i++) {
+    const a=random()*Math.PI*2, r=4+random()*24;
+    vertices.push(Math.cos(a)*r,(random()-.5)*3,Math.sin(a)*r);
+   }
+   const dustGeometry=track(new THREE.BufferGeometry());
+   dustGeometry.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));
+   const dustMaterial=track(new THREE.PointsMaterial({color:'#bdb791',size:.026,transparent:true,opacity:.44,depthWrite:false}));
+   const dust=new THREE.Points(dustGeometry,dustMaterial);scene.add(dust);
+   const sphere=track(new THREE.SphereGeometry(1,64,48));
+   function makeWorld(color,seed,sun=0) {
+    const group=new THREE.Group();
+    const material=track(new THREE.ShaderMaterial({vertexShader:vertex,fragmentShader:worldFragment,
+     uniforms:{baseColor:{value:new THREE.Color(color)},time:{value:0},seed:{value:seed},sun:{value:sun}}}));
+    const mesh=new THREE.Mesh(sphere,material);group.add(mesh);
+    const atmosphereMaterial=track(new THREE.ShaderMaterial({vertexShader:vertex,fragmentShader:atmosphereFragment,
+     uniforms:{baseColor:{value:new THREE.Color(color)},strength:{value:1.3}},transparent:true,
+     side:THREE.BackSide,blending:THREE.AdditiveBlending,depthWrite:false}));
+    const atmosphere=new THREE.Mesh(sphere,atmosphereMaterial);atmosphere.scale.setScalar(1.045);group.add(atmosphere);
+    scene.add(group);return {group,mesh,material,atmosphereMaterial};
+   }
+   const core=makeWorld('#ffc881',1,1);core.group.scale.setScalar(1.15);
+   // Soft radiance around the nucleus, rendered in scene coordinates.
+   const glowCanvas=document.createElement('canvas');glowCanvas.width=256;glowCanvas.height=256;
+   const ctx=glowCanvas.getContext('2d');
+   if(ctx) {
+    const g=ctx.createRadialGradient(128,128,12,128,128,128);
+    g.addColorStop(0,'rgba(255,191,95,.7)');g.addColorStop(.17,'rgba(230,135,38,.35)');
+    g.addColorStop(.45,'rgba(141,83,24,.13)');g.addColorStop(1,'rgba(80,49,12,0)');
+    ctx.fillStyle=g;ctx.fillRect(0,0,256,256);
+    const texture=track(new THREE.CanvasTexture(glowCanvas));
+    const glow=new THREE.Sprite(track(new THREE.SpriteMaterial({map:texture,transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,opacity:.65})));
+    glow.scale.set(11,11,1);scene.add(glow);
+   }
+   const circle=Array.from({length:193},(_,i)=>new THREE.Vector3(Math.cos(i/192*Math.PI*2),0,Math.sin(i/192*Math.PI*2)));
    const worlds=ventures.map((v,i)=>{
-    const body=world(v.color,3+i*11);const orbitGeometry=keep(new THREE.BufferGeometry().setFromPoints(circlePoints(1)));const orbitMaterial=keep(new THREE.LineBasicMaterial({color:v.color,transparent:true,opacity:.11}));const orbit=new THREE.LineLoop(orbitGeometry,orbitMaterial);scene.add(orbit);
-    const loadRingGeometry=keep(new THREE.RingGeometry(1.35,1.38,96));const loadRingMaterial=keep(new THREE.MeshBasicMaterial({color:v.color,side:THREE.DoubleSide,transparent:true,opacity:.45,depthWrite:false}));const loadRing=new THREE.Mesh(loadRingGeometry,loadRingMaterial);loadRing.rotation.x=-Math.PI/2;body.group.add(loadRing);
-    const moonGroup=new THREE.Group();body.group.add(moonGroup);v.projects.forEach((p,j)=>{const moon=new THREE.Mesh(keep(new THREE.SphereGeometry(.095,12,8)),keep(new THREE.MeshBasicMaterial({color:v.color})));moon.userData.project=p;moonGroup.add(moon)});
-    body.mesh.userData.ventureId=v.id;return {...body,orbit,orbitMaterial,moonGroup,loadRing,loadRingMaterial,id:v.id,i,distance:4+i*1.55,angle:angles[i%angles.length],size:.6};
+    const body=makeWorld(v.color,i*13+3);
+    const orbit=new THREE.LineLoop(track(new THREE.BufferGeometry().setFromPoints(circle)),
+     track(new THREE.LineBasicMaterial({color:'#adac8a',transparent:true,opacity:.075})));
+    scene.add(orbit);
+    const ring=new THREE.Mesh(track(new THREE.RingGeometry(1.31,1.322,128)),
+     track(new THREE.MeshBasicMaterial({color:v.color,side:THREE.DoubleSide,transparent:true,opacity:.38,depthWrite:false})));
+    ring.rotation.x=-Math.PI/2+.23;ring.rotation.z=.14*i;body.group.add(ring);
+    const moonGroup=new THREE.Group();body.group.add(moonGroup);
+    v.projects.forEach(()=>moonGroup.add(new THREE.Mesh(track(new THREE.SphereGeometry(.068,16,12)),
+     track(new THREE.MeshBasicMaterial({color:v.color,transparent:true,opacity:.66})))));
+    body.mesh.userData.id=v.id;
+    return {...body,id:v.id,i,orbit,ring,moonGroup,distance:6+i*2.1,size:1,angle:positions[i%positions.length]};
    });
-   const raycaster=new THREE.Raycaster(),mouse=new THREE.Vector2();let down=null;
-   const pointerDown=e=>{down=[e.clientX,e.clientY]};const pointerUp=e=>{if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>6)return;const rect=renderer.domElement.getBoundingClientRect();mouse.set((e.clientX-rect.left)/rect.width*2-1,-(e.clientY-rect.top)/rect.height*2+1);raycaster.setFromCamera(mouse,camera);const hit=raycaster.intersectObjects(worlds.map(w=>w.mesh))[0];if(hit)live.current.onSelect(hit.object.userData.ventureId)};
-   renderer.domElement.addEventListener('pointerdown',pointerDown);renderer.domElement.addEventListener('pointerup',pointerUp);
-   const onLost=e=>{e.preventDefault();cancelAnimationFrame(frame);setFailed(true)};renderer.domElement.addEventListener('webglcontextlost',onLost);
-   resize=new ResizeObserver(()=>{if(disposed)return;const w=el.clientWidth,h=el.clientHeight;camera.aspect=w/h;camera.zoom=Math.min(1,Math.max(.56,camera.aspect/1.15));camera.updateProjectionMatrix();renderer.setSize(w,h);composer.setSize(w,h)});resize.observe(el);
-   let t=0,last=0;const pos=new THREE.Vector3();
-   function animate(ms){if(disposed)return;frame=requestAnimationFrame(animate);if(document.hidden){last=ms;return}const dt=Math.min((ms-last)/1000,.04);last=ms;if(!live.current.paused)t+=dt;controls.update();const st=live.current,ordered=rank(st.ventures,st.tasks,st.lens);
-    core.material.uniforms.time.value=t;core.mesh.rotation.y=t*.08;
-    for(const w of worlds){const v=st.ventures.find(x=>x.id===w.id);if(!v)continue;const index=ordered.findIndex(x=>x.id===w.id),value=lensScore(v,st.tasks,st.lens),count=openTasks(v,st.tasks).length;const normalized=st.lens==='tasks'?Math.min(value/10,1):value/100;const targetDistance=v.status==='park'?13.2+(w.i%2)*1.1:4.2+index*1.52;w.distance=THREE.MathUtils.lerp(w.distance,targetDistance,.025);w.size=THREE.MathUtils.lerp(w.size,.46+normalized*.68,.035);const a=w.angle+Math.sin(t*.025+w.i)*.055;w.group.position.set(Math.cos(a)*w.distance,Math.sin(t*.3+w.i)*.07,Math.sin(a)*w.distance);w.group.scale.setScalar(w.size);w.mesh.rotation.y=t*(.065+v.scores.urgency*.008);w.material.uniforms.time.value=t;w.orbit.scale.setScalar(w.distance);w.orbitMaterial.opacity=w.id===st.selected?.27:.075;w.loadRingMaterial.opacity=w.id===st.selected?.8:.35;w.loadRing.scale.setScalar(1+count*.018);w.at.uniforms.strength.value=.7+v.scores.mental*.12;w.moonGroup.visible=w.id===st.selected;w.moonGroup.children.forEach((m,j)=>{const ma=t*.13+j*Math.PI*2/w.moonGroup.children.length;m.position.set(Math.cos(ma)*2.15,.18,Math.sin(ma)*2.15)});
-     const label=labelRefs.current[w.id];if(label){pos.copy(w.group.position);pos.y+=w.size+ .55;pos.project(camera);label.style.transform=`translate(-50%, -100%) translate(${Math.round(THREE.MathUtils.clamp((pos.x*.5+.5)*el.clientWidth,label.offsetWidth/2+8,el.clientWidth-label.offsetWidth/2-8))}px,${Math.round(THREE.MathUtils.clamp((-pos.y*.5+.5)*el.clientHeight,130,el.clientHeight-45))}px)`;label.style.visibility=pos.z>1?'hidden':'visible';label.style.zIndex=String(Math.round((1-pos.z)*100));}
+
+   const pointer=new THREE.Vector2(),ray=new THREE.Raycaster();let down=null;
+   const pointerDown=e=>{down=[e.clientX,e.clientY]};
+   const pointerUp=e=>{
+    if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>6)return;
+    const r=renderer.domElement.getBoundingClientRect();
+    pointer.set((e.clientX-r.left)/r.width*2-1,-(e.clientY-r.top)/r.height*2+1);
+    ray.setFromCamera(pointer,camera);
+    const hit=ray.intersectObjects(worlds.map(w=>w.mesh))[0];
+    if(hit)live.current.onSelect(hit.object.userData.id);
+   };
+   const contextLost=e=>{e.preventDefault();cancelAnimationFrame(frame);setFailed(true)};
+   renderer.domElement.addEventListener('pointerdown',pointerDown);
+   renderer.domElement.addEventListener('pointerup',pointerUp);
+   renderer.domElement.addEventListener('webglcontextlost',contextLost);
+   resize=new ResizeObserver(()=>{
+    if(disposed)return;const w=el.clientWidth,h=el.clientHeight;
+    camera.aspect=w/h;camera.zoom=Math.min(.88,Math.max(.43,camera.aspect/1.85));
+    camera.updateProjectionMatrix();renderer.setSize(w,h);composer.setSize(w,h);
+   });resize.observe(el);
+
+   let time=0,elapsed=0,last=0,previousSelected=selected,travel=0;
+   const projected=new THREE.Vector3(),target=new THREE.Vector3(),center=new THREE.Vector3(),edge=new THREE.Vector3(),right=new THREE.Vector3();
+   function animate(ms) {
+    if(disposed)return;frame=requestAnimationFrame(animate);
+    if(document.hidden){last=ms;return}
+    const dt=Math.min((ms-last)/1000,.04);last=ms;elapsed+=dt;
+    const st=live.current;if(!st.paused)time+=dt;
+    if(st.selected!==previousSelected){previousSelected=st.selected;travel=st.paused?0:1.2}
+    const ordered=rank(st.ventures,st.tasks,st.lens),blend=1-Math.exp(-dt*3.8);
+    const occupied=[];
+    core.material.uniforms.time.value=time;core.mesh.rotation.y=time*.025;
+    dust.rotation.y=time*.006;
+    // Selected world first so its label has the strongest visual claim.
+    const labelOrder=[...worlds].sort((a,b)=>Number(b.id===st.selected)-Number(a.id===st.selected));
+    for(const w of worlds) {
+     const v=st.ventures.find(x=>x.id===w.id);if(!v)continue;
+     const index=ordered.findIndex(x=>x.id===w.id),count=openTasks(v,st.tasks).length;
+     const score=lensScore(v,st.tasks,st.lens);
+     const normalized=st.lens==='tasks'?Math.min(score/10,1):score/100;
+     const targetDistance=v.status==='park'?18.2+(w.i%2)*.7:6+index*2.1;
+     w.distance=THREE.MathUtils.lerp(w.distance,targetDistance,blend);
+     w.size=THREE.MathUtils.lerp(w.size,.66+normalized*1.48,blend);
+     const a=w.angle+time*.004+Math.sin(time*.018+w.i)*.025;
+     w.group.position.set(Math.cos(a)*w.distance,Math.sin(time*.25+w.i)*.06,Math.sin(a)*w.distance);
+     const arrival=st.paused?1:THREE.MathUtils.smoothstep(elapsed-w.i*.065,0,.9);
+     w.group.scale.setScalar(w.size*Math.max(arrival,.01));
+     w.mesh.rotation.y=time*(.017+v.scores.urgency*.006);
+     w.material.uniforms.time.value=time;
+     w.atmosphereMaterial.uniforms.strength.value=.65+v.scores.mental*.12;
+     w.orbit.scale.setScalar(w.distance);w.orbit.material.opacity=w.id===st.selected?.24:.048;
+     w.ring.scale.setScalar(1+count*.024);w.ring.material.opacity=w.id===st.selected?.5:.18;
+     w.moonGroup.visible=w.id===st.selected;
+     w.moonGroup.children.forEach((m,j)=>{const a=time*.075+j*Math.PI*2/w.moonGroup.children.length;m.position.set(Math.cos(a)*1.65,.16,Math.sin(a)*1.65)});
     }
-    const coreLabel=labelRefs.current.core;if(coreLabel){pos.set(0,1.1,0).project(camera);coreLabel.style.transform=`translate(-50%, -50%) translate(${(pos.x*.5+.5)*el.clientWidth}px,${(-pos.y*.5+.5)*el.clientHeight+45}px)`;}composer.render();
-   }frame=requestAnimationFrame(animate);
-   return ()=>{disposed=true;cancelAnimationFrame(frame);resize.disconnect();controls.dispose();controlRef.current=null;renderer.domElement.removeEventListener('pointerdown',pointerDown);renderer.domElement.removeEventListener('pointerup',pointerUp);renderer.domElement.removeEventListener('webglcontextlost',onLost);tracked.forEach(x=>x.dispose());bloom.dispose();composer.dispose();renderer.dispose();renderer.domElement.remove();};
-  }catch(e){setFailed(true);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();composer?.dispose();renderer?.dispose();renderer?.domElement?.remove();tracked.forEach(x=>x.dispose());console.warn('3D view unavailable; the venture list remains available.',e.message);}
+    if(travel>0&&!interaction) {
+     const active=worlds.find(w=>w.id===st.selected);
+     if(active){target.copy(active.group.position).multiplyScalar(.12);target.y=0;controls.target.lerp(target,1-Math.exp(-dt*2.8));}
+     travel-=dt;
+    }
+    controls.update();
+    for(const w of labelOrder) {
+     const label=labels.current[w.id];if(!label)continue;
+     center.copy(w.group.position).project(camera);
+     right.setFromMatrixColumn(camera.matrixWorld,0).multiplyScalar(w.size);
+     edge.copy(w.group.position).add(right).project(camera);
+     const cx=(center.x*.5+.5)*el.clientWidth,cy=(-center.y*.5+.5)*el.clientHeight;
+     const radius=Math.abs(edge.x-center.x)*el.clientWidth*.5;
+     const width=label.offsetWidth,height=label.offsetHeight;
+     const side=w.i===0||w.i===2?-1:w.i===1||w.i===4?1:0;
+     let x=cx+(side?(radius+width/2+13)*side:0);
+     let y=side?cy+height/2:cy-radius-11;
+     const unclamped=x;
+     x=THREE.MathUtils.clamp(x,width/2+10,el.clientWidth-width/2-10);
+     if(side&&Math.abs(x-unclamped)>width*.22){x=THREE.MathUtils.clamp(cx,width/2+10,el.clientWidth-width/2-10);y=cy-radius-12;}
+     y=THREE.MathUtils.clamp(y,65,el.clientHeight-25);
+     for(let attempt=0;attempt<3;attempt++) {
+      if(!occupied.some(r=>Math.abs(x-r.x)<(width+r.width)/2+6&&Math.abs(y-r.y)<(height+r.height)/2+5))break;
+      y=THREE.MathUtils.clamp(y-height-8,65,el.clientHeight-25);
+     }
+     const connector=connectors.current[w.id];
+     if(connector){const ly=y-height/2;const dx=x-cx,dy=ly-cy,len=Math.hypot(dx,dy)||1;
+      connector.setAttribute('d',`M ${cx+dx/len*(radius+3)} ${cy+dy/len*(radius+3)} L ${x} ${ly}`);
+      connector.style.opacity=w.id===st.selected?'.38':'.12';}
+     occupied.push({x,y,width,height});
+     label.style.transform=`translate(-50%,-100%) translate(${Math.round(x)}px,${Math.round(y)}px)`;
+     label.style.visibility=center.z>1?'hidden':'visible';label.style.opacity=String(st.paused?1:Math.min(1,elapsed/.9));
+     label.style.zIndex=w.id===st.selected?'4':'2';
+    }
+    const coreLabel=labels.current.core;
+    if(coreLabel){projected.set(0,-1.25,0).project(camera);coreLabel.style.transform=`translate(-50%,0) translate(${(projected.x*.5+.5)*el.clientWidth}px,${(-projected.y*.5+.5)*el.clientHeight+6}px)`;}
+    composer.render();
+   }
+   frame=requestAnimationFrame(animate);
+   return ()=>{
+    disposed=true;cancelAnimationFrame(frame);resize.disconnect();controls.dispose();controlsRef.current=null;
+    renderer.domElement.removeEventListener('pointerdown',pointerDown);renderer.domElement.removeEventListener('pointerup',pointerUp);
+    renderer.domElement.removeEventListener('webglcontextlost',contextLost);resources.forEach(r=>r.dispose());
+    bloom.dispose();composer.dispose();renderer.dispose();renderer.domElement.remove();
+   };
+  } catch(error) {
+   setFailed(true);cancelAnimationFrame(frame);resize?.disconnect();controls?.dispose();
+   bloom?.dispose();composer?.dispose();renderer?.dispose();renderer?.domElement?.remove();resources.forEach(r=>r.dispose());
+   console.warn('3D view unavailable; venture controls remain available.',error.message);
+  }
  },[ids]);
+
  return <div className="scene-host" ref={host} aria-label="Interactive 3D venture map">
- {failed?<div className="scene-fallback"><span>THE MAP IS STILL YOURS</span><h2>3D isn’t available on this device.</h2><p>Use the venture list and Priority view to explore the same rankings and next moves.</p></div>:<div className="planet-labels">{ventures.map(v=><button className={'planet-label '+(selected===v.id?'selected':'')} style={{'--world':v.color}} key={v.id} ref={e=>labelRefs.current[v.id]=e} onClick={()=>onSelect(v.id)} aria-pressed={selected===v.id}><span>{v.short}</span><small>{v.status==='park'?'PARKED':openTasks(v,tasks).length+' OPEN'}</small></button>)}<div className="core-label" ref={e=>labelRefs.current.core=e}>AMAR PEARSON<small>YOUR ATTENTION IS FINITE</small></div></div>}
- </div>
+  {failed?<div className="scene-fallback"><span>YOUR PERSPECTIVE, STILL INTACT</span><h2>3D isn’t available on this device.</h2><p>Use the venture dock or Priority view to explore the same rankings and next moves.</p></div>:
+   <div className="planet-labels"><svg className="planet-connectors" aria-hidden="true">{ventures.map(v=><path key={v.id} ref={el=>connectors.current[v.id]=el} fill="none" stroke={v.color} strokeWidth=".7"/>)}</svg>{ventures.map(v=><button key={v.id} ref={el=>labels.current[v.id]=el}
+    className={'planet-label '+(selected===v.id?'selected':'')} style={{'--world':v.color}}
+    onClick={()=>onSelect(v.id)} aria-pressed={selected===v.id}><span><i className="label-marker"/>{v.short}</span>
+    <small>{v.status==='park'?'Parked for now':openTasks(v,tasks).length+' missions · '+Math.round(lensScore(v,tasks,lens))+(lens==='tasks'?' open':' / 100')}</small>
+   </button>)}<div className="core-label" ref={el=>labels.current.core=el}>AMAR PEARSON<small>ONE SOURCE OF ENERGY</small></div></div>}
+ </div>;
 }

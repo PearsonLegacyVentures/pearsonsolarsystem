@@ -2,6 +2,8 @@
 
 Amar Pearson's personal visual map of ventures, project work, attention, and the next useful move.
 
+![Modern observatory preview](docs/preview.jpg)
+
 ## Run
 
 Use Node 22.12 or newer.
@@ -17,6 +19,14 @@ npm run build
 ```
 
 The production output is `dist/`. On Cloudflare Pages, connect this repository, choose `main`, set the build command to `npm run build` and the output directory to `dist`. No backend, credentials, or environment variables are required. `npm run preview` serves the production build locally.
+
+## Visual direction
+
+The modernized observatory uses a full-width 3D stage, a restrained charcoal and warm-metal palette, larger shaded worlds, soft central radiance, a floating inspector, and a venture dock. Labels use light leader lines, adjust to avoid overlaps, and shorten on mobile. Entrances are staggered; selecting a venture gently shifts the camera. Motion can be paused and respects reduced-motion preferences.
+
+Visual direction references reviewed: MotionSites’ Orbit Engineers and NOVA Space Systems examples at https://motionsites.ai/. Reference imagery is not copied into this project.
+
+The redesign changes presentation only. Task inventory, scores, the storage key and backup format, three workspace views, editing, and day-planning rules are preserved.
 
 ## What is included
 
@@ -47,6 +57,7 @@ No live integrations, automatic chat synchronization, account authentication, or
 | File | Purpose |
 | --- | --- |
 | `src/App.jsx` | Navigation, inspection, daily plan, mission editing, calibration, backup dialogs |
+| `docs/preview.jpg` | Checked desktop preview of the redesigned observatory |
 | `src/components/SolarScene.jsx` | 3D scene, shaders, motion, labels, selection, WebGL fallback |
 | `src/data/seed.js` | Editable starting ventures and mission inventory |
 | `src/lib/model.js` | Ranking, day planning, date handling, import validation |
@@ -59,4 +70,4 @@ No live integrations, automatic chat synchronization, account authentication, or
 | `tests/model.test.js` | Ranking, capacity, task exclusion, import integrity, Nassau dates |
 | `package.json`, `package-lock.json`, `.nvmrc`, `.gitignore` | Reproducible dependencies and runtime setup |
 
-No pre-existing routes or working features were removed; the repository was empty before this build.
+No routes or working features were removed by the initial build or the observatory redesign. The initial repository was empty.
