@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {makeSeed} from '../src/data/seed.js';
+import {rank,priority,dailyPlan,validateState,isOverdue,dateKey} from '../src/lib/model.js';
+test('seed is a valid, backed-up state',()=>assert.equal(validateState(makeSeed()),true));
+test('tasks and attention cannot inflate strategic priority',()=>{const s=makeSeed(),v=s.ventures[0];assert.equal(priority(v),96);assert.equal(priority({...v,scores:{...v.scores,attention:1,mental:1}}),96);assert.equal(rank(s.ventures,s.tasks)[0].id,'tranq');assert.equal(rank(s.ventures,s.tasks,'tasks')[0].id,'tranq')});
+test('daily plan fits capacity, excludes parked/delegated work and diversifies ventures',()=>{const s=makeSeed(),p=dailyPlan(s,'2026-10-06');assert.equal(p.top.length,3);assert.equal(new Set(p.top.map(t=>t.ventureId)).size,3);assert.ok(p.minutes<=s.hours*60);assert.ok(p.top.every(t=>!['toast','tissue','lab'].includes(t.ventureId)));s.hours=.5;assert.ok(dailyPlan(s,'2026-10-06').minutes<=30)});
+test('completed and delegated tasks leave daily recommendations',()=>{const s=makeSeed(),id=dailyPlan(s,'2026-10-06').top[0].id;s.tasks.find(t=>t.id===id).status='done';assert.ok(!dailyPlan(s,'2026-10-06').top.some(t=>t.id===id));s.tasks.find(t=>t.id===id).status='delegated';assert.ok(!dailyPlan(s,'2026-10-06').top.some(t=>t.id===id))});
+test('zero eligible work yields a quiet, valid day',()=>{const s=makeSeed();s.tasks.forEach(t=>t.status='done');const p=dailyPlan(s,'2026-10-06');assert.deepEqual(p.top,[]);assert.equal(p.minutes,0);assert.equal(p.quick,undefined)});
+test('malformed imports are rejected before touching saved data',()=>{for(const change of [s=>s.hours=999,s=>s.ventures[0].scores.impact=100,s=>s.tasks[0].ventureId='missing',s=>s.tasks[0].minutes=-1,s=>s.ventures[0].color='url(x)',s=>s.tasks[1].id=s.tasks[0].id,s=>s.ventures[1].id=s.ventures[0].id,s=>s.tasks[0].title='']){const s=makeSeed();change(s);assert.equal(validateState(s),false)}});
+test('due dates and local day are Nassau-specific',()=>{assert.equal(dateKey(new Date('2026-10-07T02:00:00Z')),'2026-10-06');assert.equal(isOverdue({status:'open',due:'2026-10-05'},'2026-10-06'),true);assert.equal(isOverdue({status:'done',due:'2026-10-05'},'2026-10-06'),false)});
